@@ -308,49 +308,6 @@ export default function MyTeam() {
         </div>
       )}
 
-      {/* Live Points Table */}
-      {gameweekState === 'inside' && (
-        <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-6">
-          <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
-            <div className="text-lg font-bold text-emerald-700">Live Gameweek Points</div>
-            <div className="text-sm text-gray-500">Gameweek {currentGameweek}</div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Player</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {loadingPoints ? (
-                  <tr><td colSpan={4} className="text-center py-8">Loading...</td></tr>
-                ) : playerPoints.length === 0 ? (
-                  <tr><td colSpan={4} className="text-center py-8 text-gray-500">No data yet</td></tr>
-                ) : (
-                  playerPoints.map((p, i) => (
-                    <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{p.name}</td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{p.position}</td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          p.is_starter ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                        }`}>
-                          {p.is_starter ? 'Starting' : 'Bench'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-emerald-700 font-bold">{p.points}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
 
       {/* Team Header */}
       <div className="bg-gradient-to-r from-emerald-500 to-blue-600 rounded-2xl shadow-lg p-6 text-white">
