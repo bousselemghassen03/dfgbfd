@@ -883,7 +883,7 @@ export default function MyTeam() {
                       <div className="flex items-center space-x-3">
                         <div className="w-10 h-10">
                           {rosterPlayer.player?.team_jersey ? (
-<img
+                            <img
                               src={rosterPlayer.player.team_jersey}
                               alt={`${rosterPlayer.player?.team_name} jersey`}
                               className="w-full h-full object-contain"
