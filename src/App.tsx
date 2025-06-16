@@ -1,34 +1,36 @@
 import React, { useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import ProtectedRoute from './components/auth/ProtectedRoute';
-import { GameweekProvider } from './contexts/GameweekContext';
+import { AuthProvider, useAuth } from 'src/contexts/AuthContext';
+import ProtectedRoute from 'src/components/auth/ProtectedRoute';
+import { GameweekProvider } from 'src/contexts/GameweekContext';
+import { LanguageProvider, useLanguage } from 'src/contexts/LanguageContext';
 
 // Layout Components
-import Sidebar from './components/Sidebar';
-import Header from './components/Header';
+import Sidebar from 'src/components/Sidebar';
+import Header from 'src/components/Header';
 
 // Page Components
-import Dashboard from './components/Dashboard';
-import TeamsManager from './components/teams/TeamsManager';
-import PlayersManager from './components/players/PlayersManager';
-import UsersManager from './components/users/UsersManager';
-import LeaguesManager from './components/leagues/LeaguesManager';
-import UserLeaguesManager from './components/leagues/UserLeaguesManager';
-import MatchesManager from './components/matches/MatchesManager';
-import SimulationManager from './components/simulation/SimulationManager';
-import MyTeam from './components/fantasy/MyTeam';
-import LoginForm from './components/auth/LoginForm';
-import SignupForm from './components/auth/SignupForm';
-import WorkInProgress from './components/WorkInProgress';
-import MyTeamPoints from './components/fantasy/MyTeamPoints';
+import Dashboard from 'src/components/Dashboard';
+import TeamsManager from 'src/components/teams/TeamsManager';
+import PlayersManager from 'src/components/players/PlayersManager';
+import UsersManager from 'src/components/users/UsersManager';
+import LeaguesManager from 'src/components/leagues/LeaguesManager';
+import UserLeaguesManager from 'src/components/leagues/UserLeaguesManager';
+import MatchesManager from 'src/components/matches/MatchesManager';
+import SimulationManager from 'src/components/simulation/SimulationManager';
+import MyTeam from 'src/components/fantasy/MyTeam';
+import LoginForm from 'src/components/auth/LoginForm';
+import SignupForm from 'src/components/auth/SignupForm';
+import WorkInProgress from 'src/components/WorkInProgress';
+import MyTeamPoints from 'src/components/fantasy/MyTeamPoints';
 
 // Layout component that includes sidebar and header
 function Layout({ children, isAdmin = true }: { children: React.ReactNode, isAdmin?: boolean }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const location = useLocation();
   const { user } = useAuth();
+  const { t } = useLanguage(); // Use the translation hook in Layout
 
   // Hide sidebar and header on auth pages
   if (['/login', '/signup'].includes(location.pathname)) {
@@ -36,6 +38,7 @@ function Layout({ children, isAdmin = true }: { children: React.ReactNode, isAdm
   }
 
   // If not admin, show work in progress page for admin routes
+  // Note: For a fully translated experience, WorkInProgress component itself would need translation.
   if (!isAdmin && ['/teams', '/players', '/users', '/matches', '/simulation'].includes(location.pathname)) {
     return <WorkInProgress />;
   }
@@ -58,10 +61,15 @@ function App() {
   return (
     <Router>
       <Toaster position="top-right" />
+      {/* AuthProvider wraps everything that needs user context */}
       <AuthProvider>
-        <GameweekProvider>
-          <AppRoutes />
-        </GameweekProvider>
+        {/* LanguageProvider wraps everything that needs translation context */}
+        <LanguageProvider>
+          {/* GameweekProvider wraps components dependent on gameweek state */}
+          <GameweekProvider>
+            <AppRoutes />
+          </GameweekProvider>
+        </LanguageProvider>
       </AuthProvider>
     </Router>
   );
@@ -75,11 +83,13 @@ function isAdminUser(user: any) {
 // Routes component that handles all the routing
 function AppRoutes() {
   const { user, loading } = useAuth();
-  
+  const { t } = useLanguage(); // Use the translation hook here for loading message
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-indigo-500"></div>
+        <p className="ml-3 text-lg text-indigo-700">{t('Loading...')}</p> {/* Translated loading message */}
       </div>
     );
   }
@@ -93,7 +103,7 @@ function AppRoutes() {
         {/* Public Routes */}
         <Route path="/login" element={!user ? <LoginForm /> : <Navigate to="/" />} />
         <Route path="/signup" element={!user ? <SignupForm /> : <Navigate to="/" />} />
-        
+
         {/* Protected Routes */}
         <Route
           path="/"
@@ -105,7 +115,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/my-team"
           element={
@@ -116,7 +126,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/teams"
           element={
@@ -127,7 +137,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/players"
           element={
@@ -138,7 +148,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/users"
           element={
@@ -149,7 +159,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/leagues"
           element={
@@ -160,7 +170,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/matches"
           element={
@@ -182,7 +192,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         {/* User-specific routes */}
         <Route
           path="/my-leagues"
@@ -194,7 +204,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/fixtures"
           element={
@@ -205,7 +215,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         <Route
           path="/my-team-points"
           element={
@@ -216,7 +226,7 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
-        
+
         {/* Catch all route */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
