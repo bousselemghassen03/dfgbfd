@@ -1,98 +1,87 @@
 import React, { useState, useEffect } from 'react';
-import { Play, Pause, Square, Clock, Users, Target, AlertTriangle, Trophy, Plus, Minus, ArrowLeftRight, Check, X } from 'lucide-react';
+import { Play, Pause, Square, Users, Target, Clock, AlertTriangle, RefreshCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
-import { RealMatch, Player, Team } from '../../types/database';
-import toast from 'react-hot-toast';
+import { RealMatch, Player, GameweekScore } from '../../types/database';
 import { useGameweek } from '../../contexts/GameweekContext';
+import toast from 'react-hot-toast';
+
+interface MatchWithTeams extends RealMatch {
+  home_team_name?: string;
+  away_team_name?: string;
+}
 
 interface PlayerWithTeam extends Player {
   team_name?: string;
-  team_short_name?: string;
+  team_jersey?: string;
 }
 
-interface PlayerStats {
-  player_id: string;
-  minutes_played: number;
-  goals: number;
-  assists: number;
-  clean_sheet: boolean;
-  yellow_cards: number;
-  red_cards: number;
-  saves: number;
-  penalty_saves: number;
-  penalty_misses: number;
-  own_goals: number;
-  goals_conceded: number;
-  bonus_points: number;
-  total_points: number;
-  is_playing: boolean;
-  is_starting: boolean;
-  substituted_at?: number;
-  substitute_for?: string;
+interface MatchLineup {
+  starters: PlayerWithTeam[];
+  bench: PlayerWithTeam[];
 }
 
-interface MatchEvent {
-  id: string;
+interface SimulationEvent {
   minute: number;
-  type: 'goal' | 'assist' | 'yellow_card' | 'red_card' | 'substitution' | 'penalty_save' | 'penalty_miss' | 'own_goal' | 'save';
+  type: 'goal' | 'assist' | 'yellow_card' | 'red_card' | 'substitution' | 'clean_sheet';
   player_id: string;
   player_name: string;
+  team: string;
   description: string;
 }
 
-interface SubstitutionModal {
-  isOpen: boolean;
-  teamId: string;
-  teamName: string;
-}
-
 export default function LiveMatchSimulation() {
-  const [matches, setMatches] = useState<(RealMatch & { home_team_name?: string; away_team_name?: string })[]>([]);
-  const [selectedMatch, setSelectedMatch] = useState<RealMatch | null>(null);
-  const [homePlayers, setHomePlayers] = useState<PlayerWithTeam[]>([]);
-  const [awayPlayers, setAwayPlayers] = useState<PlayerWithTeam[]>([]);
-  const [playerStats, setPlayerStats] = useState<Record<string, PlayerStats>>({});
-  const [matchEvents, setMatchEvents] = useState<MatchEvent[]>([]);
+  const { gameweekState, startGameweek, pauseGameweek, resumeGameweek, endGameweek } = useGameweek();
+  const [matches, setMatches] = useState<MatchWithTeams[]>([]);
+  const [selectedMatch, setSelectedMatch] = useState<MatchWithTeams | null>(null);
+  const [homeLineup, setHomeLineup] = useState<MatchLineup>({ starters: [], bench: [] });
+  const [awayLineup, setAwayLineup] = useState<MatchLineup>({ starters: [], bench: [] });
   const [currentMinute, setCurrentMinute] = useState(0);
-  const [isRunning, setIsRunning] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-  const [gameweek, setGameweek] = useState(1);
-  const [loading, setLoading] = useState(true);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [events, setEvents] = useState<SimulationEvent[]>([]);
   const [homeScore, setHomeScore] = useState(0);
   const [awayScore, setAwayScore] = useState(0);
-  const [lineupSet, setLineupSet] = useState(false);
-  const [substitutionModal, setSubstitutionModal] = useState<SubstitutionModal>({ isOpen: false, teamId: '', teamName: '' });
-  const [homeSubstitutions, setHomeSubstitutions] = useState(0);
-  const [awaySubstitutions, setAwaySubstitutions] = useState(0);
-  const { gameweekState, startGameweek, pauseGameweek, resumeGameweek, endGameweek } = useGameweek();
+  const [loading, setLoading] = useState(true);
+  const [currentGameweek, setCurrentGameweek] = useState(1);
 
   useEffect(() => {
+    fetchCurrentGameweek();
     fetchMatches();
   }, []);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    
-    if (isRunning && !isPaused) {
+    if (isSimulating && gameweekState === 'inside') {
       interval = setInterval(() => {
         setCurrentMinute(prev => {
-          const newMinute = prev + 1;
-          
-          // Full time at 90 seconds (90 minutes)
-          if (newMinute >= 90) {
-            setIsRunning(false);
-            toast.success('Full Time! Match simulation completed.');
-            calculateFinalPoints();
+          if (prev >= 90) {
+            setIsSimulating(false);
+            completeMatch();
             return 90;
           }
           
-          return newMinute;
+          // Generate random events
+          if (Math.random() < 0.1) { // 10% chance per minute
+            generateRandomEvent(prev + 1);
+          }
+          
+          return prev + 1;
         });
-      }, 1000); // 1 second = 1 minute
+      }, 1000); // 1 second = 1 minute in simulation
     }
-    
     return () => clearInterval(interval);
-  }, [isRunning, isPaused]);
+  }, [isSimulating, gameweekState, homeLineup, awayLineup]);
+
+  const fetchCurrentGameweek = async () => {
+    const { data } = await supabase
+      .from('leagues')
+      .select('gameweek_current')
+      .order('created_at', { ascending: true })
+      .limit(1);
+    
+    if (data && data.length > 0) {
+      setCurrentGameweek(data[0].gameweek_current);
+    }
+  };
 
   const fetchMatches = async () => {
     try {
@@ -100,26 +89,20 @@ export default function LiveMatchSimulation() {
         .from('real_matches')
         .select(`
           *,
-          home_team:home_team_id (
-            name,
-            short_name
-          ),
-          away_team:away_team_id (
-            name,
-            short_name
-          )
+          home_team:home_team_id (name),
+          away_team:away_team_id (name)
         `)
         .eq('status', 'scheduled')
         .order('match_date', { ascending: true });
 
       if (error) throw error;
-      
+
       const matchesWithTeamNames = data?.map(match => ({
         ...match,
         home_team_name: match.home_team?.name,
         away_team_name: match.away_team?.name
       })) || [];
-      
+
       setMatches(matchesWithTeamNames);
     } catch (error) {
       console.error('Error fetching matches:', error);
@@ -129,845 +112,355 @@ export default function LiveMatchSimulation() {
     }
   };
 
-  const fetchMatchPlayers = async (match: RealMatch) => {
-    try {
-      // Fetch home team players
-      const { data: homePlayersData, error: homeError } = await supabase
-        .from('players')
-        .select(`
-          *,
-          teams:team_id (
-            name,
-            short_name
-          )
-        `)
-        .eq('team_id', match.home_team_id);
+  const fetchTeamPlayers = async (teamId: string) => {
+    const { data, error } = await supabase
+      .from('players')
+      .select(`
+        *,
+        teams:team_id (name, jersey)
+      `)
+      .eq('team_id', teamId)
+      .eq('injury_status', 'fit');
 
-      if (homeError) throw homeError;
+    if (error) throw error;
 
-      // Fetch away team players
-      const { data: awayPlayersData, error: awayError } = await supabase
-        .from('players')
-        .select(`
-          *,
-          teams:team_id (
-            name,
-            short_name
-          )
-        `)
-        .eq('team_id', match.away_team_id);
+    return data?.map(player => ({
+      ...player,
+      team_name: player.teams?.name,
+      team_jersey: player.teams?.jersey
+    })) || [];
+  };
 
-      if (awayError) throw awayError;
+  const selectMatch = async (match: MatchWithTeams) => {
+    setSelectedMatch(match);
+    
+    if (match.home_team_id && match.away_team_id) {
+      const [homePlayers, awayPlayers] = await Promise.all([
+        fetchTeamPlayers(match.home_team_id),
+        fetchTeamPlayers(match.away_team_id)
+      ]);
 
-      const homePlayersWithTeam = homePlayersData?.map(player => ({
-        ...player,
-        team_name: player.teams?.name,
-        team_short_name: player.teams?.short_name
-      })) || [];
+      // Auto-select formation (4-3-3)
+      const selectLineup = (players: PlayerWithTeam[]) => {
+        const gk = players.filter(p => p.position === 'GK').slice(0, 1);
+        const def = players.filter(p => p.position === 'DEF').slice(0, 4);
+        const mid = players.filter(p => p.position === 'MID').slice(0, 3);
+        const fwd = players.filter(p => p.position === 'FWD').slice(0, 3);
+        
+        const starters = [...gk, ...def, ...mid, ...fwd];
+        const bench = players.filter(p => !starters.includes(p)).slice(0, 7);
+        
+        return { starters, bench };
+      };
 
-      const awayPlayersWithTeam = awayPlayersData?.map(player => ({
-        ...player,
-        team_name: player.teams?.name,
-        team_short_name: player.teams?.short_name
-      })) || [];
-
-      setHomePlayers(homePlayersWithTeam);
-      setAwayPlayers(awayPlayersWithTeam);
-      setLineupSet(false);
-
-      // Initialize player stats
-      const initialStats: Record<string, PlayerStats> = {};
-      [...homePlayersWithTeam, ...awayPlayersWithTeam].forEach(player => {
-        initialStats[player.player_id] = {
-          player_id: player.player_id,
-          minutes_played: 0,
-          goals: 0,
-          assists: 0,
-          clean_sheet: false,
-          yellow_cards: 0,
-          red_cards: 0,
-          saves: 0,
-          penalty_saves: 0,
-          penalty_misses: 0,
-          own_goals: 0,
-          goals_conceded: 0,
-          bonus_points: 0,
-          total_points: 0,
-          is_playing: false,
-          is_starting: false,
-        };
-      });
-      setPlayerStats(initialStats);
-    } catch (error) {
-      console.error('Error fetching players:', error);
-      toast.error('Failed to fetch players');
+      setHomeLineup(selectLineup(homePlayers));
+      setAwayLineup(selectLineup(awayPlayers));
     }
   };
 
-  const togglePlayerStarting = (playerId: string, teamId: string) => {
-    setPlayerStats(prev => {
-      const updated = { ...prev };
-      const currentlyStarting = updated[playerId].is_starting;
-      
-      // Get all players from the same team
-      const teamPlayers = teamId === selectedMatch?.home_team_id ? homePlayers : awayPlayers;
-      const startingCount = teamPlayers.filter(p => updated[p.player_id].is_starting).length;
-      
-      // If trying to add a starter and already have 11, don't allow
-      if (!currentlyStarting && startingCount >= 11) {
-        toast.error('Cannot have more than 11 starting players per team');
-        return prev;
-      }
-      
-      // Toggle the player's starting status
-      updated[playerId].is_starting = !currentlyStarting;
-      updated[playerId].is_playing = !currentlyStarting; // Starting players are also playing initially
-      
-      return updated;
-    });
-  };
+  const generateRandomEvent = (minute: number) => {
+    const allPlayers = [...homeLineup.starters, ...awayLineup.starters];
+    if (allPlayers.length === 0) return;
 
-  const validateLineup = (teamPlayers: PlayerWithTeam[], teamName: string): boolean => {
-    const startingPlayers = teamPlayers.filter(p => playerStats[p.player_id]?.is_starting);
+    const eventTypes = ['goal', 'assist', 'yellow_card', 'red_card'];
+    const eventType = eventTypes[Math.floor(Math.random() * eventTypes.length)] as SimulationEvent['type'];
     
-    if (startingPlayers.length !== 11) {
-      toast.error(`${teamName} must have exactly 11 starting players (currently ${startingPlayers.length})`);
-      return false;
-    }
+    let eligiblePlayers = allPlayers;
     
-    // Count positions
-    const positions = {
-      GK: startingPlayers.filter(p => p.position === 'GK').length,
-      DEF: startingPlayers.filter(p => p.position === 'DEF').length,
-      MID: startingPlayers.filter(p => p.position === 'MID').length,
-      FWD: startingPlayers.filter(p => p.position === 'FWD').length
-    };
+    // Filter players based on event type
+    if (eventType === 'goal') {
+      eligiblePlayers = allPlayers.filter(p => p.position !== 'GK');
+    }
+
+    const player = eligiblePlayers[Math.floor(Math.random() * eligiblePlayers.length)];
+    const isHomePlayer = homeLineup.starters.includes(player);
     
-    if (positions.GK !== 1) {
-      toast.error(`${teamName} must have exactly 1 goalkeeper`);
-      return false;
-    }
-    
-    if (positions.DEF < 3) {
-      toast.error(`${teamName} must have at least 3 defenders`);
-      return false;
-    }
-    
-    if (positions.MID < 2) {
-      toast.error(`${teamName} must have at least 2 midfielders`);
-      return false;
-    }
-    
-    if (positions.FWD < 1) {
-      toast.error(`${teamName} must have at least 1 forward`);
-      return false;
-    }
-    
-    return true;
-  };
-
-  const confirmLineup = () => {
-    if (!selectedMatch) return;
-    
-    const homeValid = validateLineup(homePlayers, selectedMatch.home_team_name || 'Home Team');
-    const awayValid = validateLineup(awayPlayers, selectedMatch.away_team_name || 'Away Team');
-    
-    if (homeValid && awayValid) {
-      setLineupSet(true);
-      toast.success('Lineups confirmed! You can now start the match.');
-    }
-  };
-
-  const calculatePlayerPoints = (playerId: string): number => {
-    const stats = playerStats[playerId];
-    if (!stats) return 0;
-
-    const player = [...homePlayers, ...awayPlayers].find(p => p.player_id === playerId);
-    if (!player) return 0;
-
-    let points = 0;
-
-    // Minutes played points (only if player actually played)
-    if (stats.minutes_played > 0 && stats.minutes_played < 60) {
-      points += 1;
-    } else if (stats.minutes_played >= 60) {
-      points += 2;
-    }
-
-    // Goals points based on position
-    if (stats.goals > 0) {
-      switch (player.position) {
-        case 'GK':
-          points += stats.goals * 10;
-          break;
-        case 'DEF':
-          points += stats.goals * 6;
-          break;
-        case 'MID':
-          points += stats.goals * 5;
-          break;
-        case 'FWD':
-          points += stats.goals * 4;
-          break;
-      }
-    }
-
-    // Assists
-    points += stats.assists * 3;
-
-    // Clean sheet points
-    if (stats.clean_sheet) {
-      if (player.position === 'GK' || player.position === 'DEF') {
-        points += 4;
-      } else if (player.position === 'MID') {
-        points += 1;
-      }
-    }
-
-    // Goalkeeper specific points
-    if (player.position === 'GK') {
-      points += Math.floor(stats.saves / 3); // 1 point for every 3 saves
-      points += stats.penalty_saves * 5;
-      points -= Math.floor(stats.goals_conceded / 2); // -1 for every 2 goals conceded
-    }
-
-    // Defender specific points
-    if (player.position === 'DEF') {
-      points -= Math.floor(stats.goals_conceded / 2); // -1 for every 2 goals conceded
-    }
-
-    // Penalty misses
-    points -= stats.penalty_misses * 2;
-
-    // Cards
-    points -= stats.yellow_cards * 1;
-    points -= stats.red_cards * 3;
-
-    // Own goals
-    points -= stats.own_goals * 2;
-
-    // Bonus points
-    points += stats.bonus_points;
-
-    return Math.max(0, points); // Minimum 0 points
-  };
-
-  const addMatchEvent = (type: MatchEvent['type'], playerId: string, description?: string) => {
-    const player = [...homePlayers, ...awayPlayers].find(p => p.player_id === playerId);
-    if (!player) return;
-
-    // Check if player is actually playing
-    if (!playerStats[playerId]?.is_playing) {
-      toast.error(`${player.name} is not currently on the pitch`);
-      return;
-    }
-
-    if (type === 'substitution') {
-      const teamId = player.team_id;
-      const teamName = teamId === selectedMatch?.home_team_id ? selectedMatch.home_team_name : selectedMatch.away_team_name;
-      const substitutionsUsed = teamId === selectedMatch?.home_team_id ? homeSubstitutions : awaySubstitutions;
-      
-      if (substitutionsUsed >= 3) {
-        toast.error(`${teamName} has already used all 3 substitutions`);
-        return;
-      }
-      
-      setSubstitutionModal({
-        isOpen: true,
-        teamId: teamId,
-        teamName: teamName || ''
-      });
-      return;
-    }
-
-    // Auto-pause the match when an event occurs
-    setIsPaused(true);
-
-    const event: MatchEvent = {
-      id: `${Date.now()}-${Math.random()}`,
-      minute: currentMinute,
-      type,
-      player_id: playerId,
+    const event: SimulationEvent = {
+      minute,
+      type: eventType,
+      player_id: player.player_id,
       player_name: player.name,
-      description: description || `${player.name} - ${type.replace('_', ' ')}`
+      team: isHomePlayer ? selectedMatch?.home_team_name || 'Home' : selectedMatch?.away_team_name || 'Away',
+      description: `${player.name} ${eventType.replace('_', ' ')}`
     };
 
-    setMatchEvents(prev => [...prev, event]);
+    setEvents(prev => [...prev, event]);
 
-    // Update player stats
-    setPlayerStats(prev => {
-      const updated = { ...prev };
-      const stats = updated[playerId];
+    // Update scores for goals
+    if (eventType === 'goal') {
+      if (isHomePlayer) {
+        setHomeScore(prev => prev + 1);
+      } else {
+        setAwayScore(prev => prev + 1);
+      }
+    }
 
-      switch (type) {
+    // Save event to database
+    savePlayerPerformance(player, eventType, minute);
+  };
+
+  const savePlayerPerformance = async (player: PlayerWithTeam, eventType: string, minute: number) => {
+    try {
+      // Check if player already has a score for this gameweek
+      const { data: existingScore } = await supabase
+        .from('gameweek_scores')
+        .select('*')
+        .eq('player_id', player.player_id)
+        .eq('gameweek', currentGameweek)
+        .single();
+
+      let updateData: any = {
+        minutes_played: Math.max(minute, existingScore?.minutes_played || 0)
+      };
+
+      // Update stats based on event type
+      switch (eventType) {
         case 'goal':
-          stats.goals += 1;
-          if (player.team_id === selectedMatch?.home_team_id) {
-            setHomeScore(prev => prev + 1);
-          } else {
-            setAwayScore(prev => prev + 1);
-          }
+          updateData.goals = (existingScore?.goals || 0) + 1;
           break;
         case 'assist':
-          stats.assists += 1;
+          updateData.assists = (existingScore?.assists || 0) + 1;
           break;
         case 'yellow_card':
-          stats.yellow_cards += 1;
+          updateData.yellow_cards = (existingScore?.yellow_cards || 0) + 1;
           break;
         case 'red_card':
-          stats.red_cards += 1;
-          stats.is_playing = false;
-          stats.substituted_at = currentMinute;
-          break;
-        case 'penalty_save':
-          stats.penalty_saves += 1;
-          stats.saves += 1;
-          break;
-        case 'penalty_miss':
-          stats.penalty_misses += 1;
-          break;
-        case 'own_goal':
-          stats.own_goals += 1;
-          if (player.team_id === selectedMatch?.home_team_id) {
-            setAwayScore(prev => prev + 1);
-          } else {
-            setHomeScore(prev => prev + 1);
-          }
-          break;
-        case 'save':
-          stats.saves += 1;
+          updateData.red_cards = (existingScore?.red_cards || 0) + 1;
           break;
       }
 
-      // Recalculate total points
-      stats.total_points = calculatePlayerPoints(playerId);
-      
-      return updated;
-    });
-
-    toast.success(`${event.description} at ${currentMinute}'`);
-  };
-
-  const handleSubstitution = (playerOutId: string, playerInId: string) => {
-    const playerOut = [...homePlayers, ...awayPlayers].find(p => p.player_id === playerOutId);
-    const playerIn = [...homePlayers, ...awayPlayers].find(p => p.player_id === playerInId);
-    
-    if (!playerOut || !playerIn) return;
-
-    // Auto-pause the match
-    setIsPaused(true);
-
-    // Create substitution event
-    const event: MatchEvent = {
-      id: `${Date.now()}-${Math.random()}`,
-      minute: currentMinute,
-      type: 'substitution',
-      player_id: playerOutId,
-      player_name: playerOut.name,
-      description: `${playerOut.name} OFF, ${playerIn.name} ON`
-    };
-
-    setMatchEvents(prev => [...prev, event]);
-
-    // Update player stats
-    setPlayerStats(prev => {
-      const updated = { ...prev };
-      
-      // Player coming off
-      updated[playerOutId].is_playing = false;
-      updated[playerOutId].substituted_at = currentMinute;
-      
-      // Player coming on
-      updated[playerInId].is_playing = true;
-      updated[playerInId].substituted_at = currentMinute;
-      updated[playerInId].substitute_for = playerOutId;
-      
-      return updated;
-    });
-
-    // Update substitution count
-    if (playerOut.team_id === selectedMatch?.home_team_id) {
-      setHomeSubstitutions(prev => prev + 1);
-    } else {
-      setAwaySubstitutions(prev => prev + 1);
-    }
-
-    toast.success(`Substitution: ${playerOut.name} OFF, ${playerIn.name} ON at ${currentMinute}'`);
-    setSubstitutionModal({ isOpen: false, teamId: '', teamName: '' });
-  };
-
-  const updateMinutesPlayed = () => {
-    setPlayerStats(prev => {
-      const updated = { ...prev };
-      Object.keys(updated).forEach(playerId => {
-        const stats = updated[playerId];
-        if (stats.is_playing) {
-          stats.minutes_played = currentMinute;
-        } else if (stats.substituted_at && stats.substituted_at < currentMinute) {
-          // For players who were substituted off, don't update minutes beyond substitution
-          stats.minutes_played = stats.substituted_at;
+      // Calculate total points based on position and stats
+      const calculatePoints = (stats: any, position: string) => {
+        let points = 0;
+        
+        // Base points for playing
+        if (stats.minutes_played >= 60) points += 2;
+        else if (stats.minutes_played >= 1) points += 1;
+        
+        // Goals
+        if (position === 'GK' || position === 'DEF') {
+          points += (stats.goals || 0) * 6;
+        } else if (position === 'MID') {
+          points += (stats.goals || 0) * 5;
+        } else {
+          points += (stats.goals || 0) * 4;
         }
-        stats.total_points = calculatePlayerPoints(playerId);
-      });
-      return updated;
-    });
-  };
+        
+        // Assists
+        points += (stats.assists || 0) * 3;
+        
+        // Clean sheet (for GK and DEF)
+        if ((position === 'GK' || position === 'DEF') && stats.clean_sheet) {
+          points += 4;
+        }
+        
+        // Cards
+        points -= (stats.yellow_cards || 0) * 1;
+        points -= (stats.red_cards || 0) * 3;
+        
+        return Math.max(0, points);
+      };
 
-  useEffect(() => {
-    if (currentMinute > 0) {
-      updateMinutesPlayed();
-    }
-  }, [currentMinute]);
+      const newStats = { ...existingScore, ...updateData };
+      updateData.total_points = calculatePoints(newStats, player.position);
 
-  const calculateFinalPoints = () => {
-    // Calculate clean sheets
-    setPlayerStats(prev => {
-      const updated = { ...prev };
-      
-      // Home team clean sheet
-      if (awayScore === 0) {
-        homePlayers.forEach(player => {
-          const stats = updated[player.player_id];
-          if (stats.minutes_played >= 60) { // Only if played significant time
-            if (player.position === 'GK' || player.position === 'DEF') {
-              stats.clean_sheet = true;
-            } else if (player.position === 'MID') {
-              stats.clean_sheet = true;
-            }
-          }
-        });
+      if (existingScore) {
+        await supabase
+          .from('gameweek_scores')
+          .update(updateData)
+          .eq('score_id', existingScore.score_id);
+      } else {
+        await supabase
+          .from('gameweek_scores')
+          .insert([{
+            player_id: player.player_id,
+            gameweek: currentGameweek,
+            ...updateData
+          }]);
       }
-
-      // Away team clean sheet
-      if (homeScore === 0) {
-        awayPlayers.forEach(player => {
-          const stats = updated[player.player_id];
-          if (stats.minutes_played >= 60) { // Only if played significant time
-            if (player.position === 'GK' || player.position === 'DEF') {
-              stats.clean_sheet = true;
-            } else if (player.position === 'MID') {
-              stats.clean_sheet = true;
-            }
-          }
-        });
-      }
-
-      // Update goals conceded for goalkeepers and defenders who played
-      homePlayers.forEach(player => {
-        if ((player.position === 'GK' || player.position === 'DEF') && updated[player.player_id].minutes_played > 0) {
-          updated[player.player_id].goals_conceded = awayScore;
-        }
-      });
-
-      awayPlayers.forEach(player => {
-        if ((player.position === 'GK' || player.position === 'DEF') && updated[player.player_id].minutes_played > 0) {
-          updated[player.player_id].goals_conceded = homeScore;
-        }
-      });
-
-      // Recalculate all points
-      Object.keys(updated).forEach(playerId => {
-        updated[playerId].total_points = calculatePlayerPoints(playerId);
-      });
-
-      return updated;
-    });
-  };
-
-  const calculateBonusPoints = () => {
-    // Get all players sorted by total points (only those who played)
-    const allPlayers = Object.values(playerStats)
-      .map(stats => ({
-        ...stats,
-        player: [...homePlayers, ...awayPlayers].find(p => p.player_id === stats.player_id)
-      }))
-      .filter(p => p.player && p.minutes_played > 0)
-      .sort((a, b) => b.total_points - a.total_points);
-
-    // Award bonus points to top 3 performers
-    if (allPlayers.length >= 1) {
-      allPlayers[0].bonus_points += 3; // 1st place
-    }
-    if (allPlayers.length >= 2) {
-      allPlayers[1].bonus_points += 2; // 2nd place
-    }
-    if (allPlayers.length >= 3) {
-      allPlayers[2].bonus_points += 1; // 3rd place
-    }
-
-    // Update player stats with bonus points
-    setPlayerStats(prev => {
-      const updated = { ...prev };
-      allPlayers.forEach(player => {
-        if (updated[player.player_id]) {
-          updated[player.player_id].bonus_points = player.bonus_points;
-          updated[player.player_id].total_points = calculatePlayerPoints(player.player_id);
-        }
-      });
-      return updated;
-    });
-
-    return allPlayers.slice(0, 3);
-  };
-
-  const updatePlayerDatabase = async () => {
-    try {
-      const updatePromises = Object.values(playerStats)
-        .filter(stats => stats.minutes_played > 0) // Only update players who actually played
-        .map(async (stats) => {
-          const player = [...homePlayers, ...awayPlayers].find(p => p.player_id === stats.player_id);
-          if (!player) return;
-
-          // Update player's cumulative stats
-          const { error } = await supabase
-            .from('players')
-            .update({
-              total_points: player.total_points + stats.total_points,
-              games_played: player.games_played + 1,
-              goals_scored: player.goals_scored + stats.goals,
-              assists: player.assists + stats.assists,
-              clean_sheets: player.clean_sheets + (stats.clean_sheet ? 1 : 0),
-              yellow_cards: player.yellow_cards + stats.yellow_cards,
-              red_cards: player.red_cards + stats.red_cards,
-              updated_at: new Date().toISOString()
-            })
-            .eq('player_id', stats.player_id);
-
-          if (error) throw error;
-        });
-
-      await Promise.all(updatePromises);
-      toast.success('Player database updated successfully!');
     } catch (error) {
-      console.error('Error updating player database:', error);
-      toast.error('Failed to update player database');
+      console.error('Error saving player performance:', error);
     }
   };
 
-  const saveMatchResults = async () => {
+  const completeMatch = async () => {
     if (!selectedMatch) return;
 
     try {
-      // Calculate bonus points first
-      const topPerformers = calculateBonusPoints();
-
-      // Update match with final score
-      const { error: matchError } = await supabase
+      // Update match status and score
+      await supabase
         .from('real_matches')
         .update({
+          status: 'completed',
           home_score: homeScore,
-          away_score: awayScore,
-          status: 'completed'
+          away_score: awayScore
         })
         .eq('match_id', selectedMatch.match_id);
 
-      if (matchError) throw matchError;
+      // Award clean sheet points
+      const isHomeCleanSheet = awayScore === 0;
+      const isAwayCleanSheet = homeScore === 0;
 
-      // Save gameweek scores for each player who played
-      const gameweekScores = Object.values(playerStats)
-        .filter(stats => stats.minutes_played > 0)
-        .map(stats => ({
-          player_id: stats.player_id,
-          gameweek: gameweek,
-          minutes_played: stats.minutes_played,
-          goals: stats.goals,
-          assists: stats.assists,
-          clean_sheet: stats.clean_sheet,
-          yellow_cards: stats.yellow_cards,
-          red_cards: stats.red_cards,
-          saves: stats.saves,
-          bonus_points: stats.bonus_points,
-          total_points: stats.total_points
-        }));
-
-      const { error: scoresError } = await supabase
-        .from('gameweek_scores')
-        .upsert(gameweekScores, {
-          onConflict: 'player_id,gameweek'
-        });
-
-      if (scoresError) throw scoresError;
-
-      // Update player database with cumulative stats
-      await updatePlayerDatabase();
-
-      // Show top performers
-      if (topPerformers.length > 0) {
-        toast.success(
-          `Top Performers: 1st: ${topPerformers[0]?.player?.name} (${topPerformers[0]?.total_points}pts), ` +
-          `2nd: ${topPerformers[1]?.player?.name} (${topPerformers[1]?.total_points}pts), ` +
-          `3rd: ${topPerformers[2]?.player?.name} (${topPerformers[2]?.total_points}pts)`,
-          { duration: 5000 }
-        );
+      if (isHomeCleanSheet) {
+        const homeDefenders = homeLineup.starters.filter(p => p.position === 'GK' || p.position === 'DEF');
+        for (const player of homeDefenders) {
+          await updateCleanSheet(player.player_id, true);
+        }
       }
 
-      toast.success('Match results saved successfully!');
-      
-      // Reset simulation
-      resetSimulation();
+      if (isAwayCleanSheet) {
+        const awayDefenders = awayLineup.starters.filter(p => p.position === 'GK' || p.position === 'DEF');
+        for (const player of awayDefenders) {
+          await updateCleanSheet(player.player_id, true);
+        }
+      }
+
+      toast.success('Match completed successfully!');
+      fetchMatches();
     } catch (error) {
-      console.error('Error saving match results:', error);
-      toast.error('Failed to save match results');
+      console.error('Error completing match:', error);
+      toast.error('Failed to complete match');
     }
   };
 
-  const resetSimulation = () => {
-    setCurrentMinute(0);
-    setIsRunning(false);
-    setIsPaused(false);
-    setHomeScore(0);
-    setAwayScore(0);
-    setMatchEvents([]);
-    setPlayerStats({});
-    setSelectedMatch(null);
-    setHomePlayers([]);
-    setAwayPlayers([]);
-    setLineupSet(false);
-    setHomeSubstitutions(0);
-    setAwaySubstitutions(0);
-    setSubstitutionModal({ isOpen: false, teamId: '', teamName: '' });
+  const updateCleanSheet = async (playerId: string, cleanSheet: boolean) => {
+    const { data: existingScore } = await supabase
+      .from('gameweek_scores')
+      .select('*')
+      .eq('player_id', playerId)
+      .eq('gameweek', currentGameweek)
+      .single();
+
+    const updateData = {
+      clean_sheet: cleanSheet,
+      total_points: existingScore ? existingScore.total_points + (cleanSheet ? 4 : 0) : (cleanSheet ? 4 : 0)
+    };
+
+    if (existingScore) {
+      await supabase
+        .from('gameweek_scores')
+        .update(updateData)
+        .eq('score_id', existingScore.score_id);
+    } else {
+      await supabase
+        .from('gameweek_scores')
+        .insert([{
+          player_id: playerId,
+          gameweek: currentGameweek,
+          minutes_played: 90,
+          ...updateData
+        }]);
+    }
   };
 
-  const startMatch = () => {
+  const startSimulation = () => {
     if (!selectedMatch) {
       toast.error('Please select a match first');
       return;
     }
-    if (!lineupSet) {
-      toast.error('Please set lineups first');
+    
+    if (homeLineup.starters.length < 11 || awayLineup.starters.length < 11) {
+      toast.error('Both teams need 11 starters');
       return;
     }
-    setIsRunning(true);
-    setIsPaused(false);
+
+    setIsSimulating(true);
+    setCurrentMinute(0);
+    setEvents([]);
+    setHomeScore(0);
+    setAwayScore(0);
+    
+    if (gameweekState === 'outside') {
+      startGameweek();
+    }
   };
 
-  const pauseMatch = () => {
-    setIsPaused(true);
+  const pauseSimulation = () => {
+    setIsSimulating(false);
+    pauseGameweek();
   };
 
-  const resumeMatch = () => {
-    setIsPaused(false);
-    setIsRunning(true);
+  const resumeSimulation = () => {
+    setIsSimulating(true);
+    resumeGameweek();
   };
 
-  const stopMatch = () => {
-    setIsRunning(false);
-    setIsPaused(false);
-    calculateFinalPoints();
-    toast.info('Match stopped. You can save results or reset.');
+  const stopSimulation = () => {
+    setIsSimulating(false);
+    setCurrentMinute(0);
+    setEvents([]);
+    setHomeScore(0);
+    setAwayScore(0);
   };
 
-  const renderLineupSelection = () => {
-    if (!selectedMatch || lineupSet) return null;
-
-    return (
-      <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Set Starting Lineups</h3>
-        <p className="text-sm text-gray-600 mb-4">
-          Select exactly 11 starting players for each team. Click on players to toggle between starting XI and bench.
-        </p>
-        
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Home Team Lineup */}
-          <div>
-            <h4 className="font-medium text-gray-900 mb-3">
-              {selectedMatch.home_team_name} 
-              <span className="ml-2 text-sm text-gray-500">
-                ({homePlayers.filter(p => playerStats[p.player_id]?.is_starting).length}/11 selected)
-              </span>
-            </h4>
-            
-            <div className="space-y-2">
-              <div className="text-sm font-medium text-green-700 mb-2">Starting XI</div>
-              {homePlayers
-                .filter(p => playerStats[p.player_id]?.is_starting)
-                .sort((a, b) => {
-                  const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                  return order[a.position] - order[b.position];
-                })
-                .map(player => (
-                  <div 
-                    key={player.player_id}
-                    onClick={() => togglePlayerStarting(player.player_id, player.team_id)}
-                    className="flex items-center justify-between p-2 bg-green-50 border border-green-200 rounded cursor-pointer hover:bg-green-100"
-                  >
-                    <div>
-                      <div className="font-medium text-gray-900">{player.name}</div>
-                      <div className="text-sm text-gray-500">{player.position}</div>
-                    </div>
-                    <Check className="h-4 w-4 text-green-600" />
-                  </div>
-                ))}
-              
-              <div className="text-sm font-medium text-gray-700 mb-2 mt-4">Bench</div>
-              {homePlayers
-                .filter(p => !playerStats[p.player_id]?.is_starting)
-                .sort((a, b) => {
-                  const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                  return order[a.position] - order[b.position];
-                })
-                .map(player => (
-                  <div 
-                    key={player.player_id}
-                    onClick={() => togglePlayerStarting(player.player_id, player.team_id)}
-                    className="flex items-center justify-between p-2 bg-gray-50 border border-gray-200 rounded cursor-pointer hover:bg-gray-100"
-                  >
-                    <div>
-                      <div className="font-medium text-gray-900">{player.name}</div>
-                      <div className="text-sm text-gray-500">{player.position}</div>
-                    </div>
-                    <Plus className="h-4 w-4 text-gray-400" />
-                  </div>
-                ))}
-            </div>
-          </div>
-
-          {/* Away Team Lineup */}
-          <div>
-            <h4 className="font-medium text-gray-900 mb-3">
-              {selectedMatch.away_team_name}
-              <span className="ml-2 text-sm text-gray-500">
-                ({awayPlayers.filter(p => playerStats[p.player_id]?.is_starting).length}/11 selected)
-              </span>
-            </h4>
-            
-            <div className="space-y-2">
-              <div className="text-sm font-medium text-blue-700 mb-2">Starting XI</div>
-              {awayPlayers
-                .filter(p => playerStats[p.player_id]?.is_starting)
-                .sort((a, b) => {
-                  const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                  return order[a.position] - order[b.position];
-                })
-                .map(player => (
-                  <div 
-                    key={player.player_id}
-                    onClick={() => togglePlayerStarting(player.player_id, player.team_id)}
-                    className="flex items-center justify-between p-2 bg-blue-50 border border-blue-200 rounded cursor-pointer hover:bg-blue-100"
-                  >
-                    <div>
-                      <div className="font-medium text-gray-900">{player.name}</div>
-                      <div className="text-sm text-gray-500">{player.position}</div>
-                    </div>
-                    <Check className="h-4 w-4 text-blue-600" />
-                  </div>
-                ))}
-              
-              <div className="text-sm font-medium text-gray-700 mb-2 mt-4">Bench</div>
-              {awayPlayers
-                .filter(p => !playerStats[p.player_id]?.is_starting)
-                .sort((a, b) => {
-                  const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                  return order[a.position] - order[b.position];
-                })
-                .map(player => (
-                  <div 
-                    key={player.player_id}
-                    onClick={() => togglePlayerStarting(player.player_id, player.team_id)}
-                    className="flex items-center justify-between p-2 bg-gray-50 border border-gray-200 rounded cursor-pointer hover:bg-gray-100"
-                  >
-                    <div>
-                      <div className="font-medium text-gray-900">{player.name}</div>
-                      <div className="text-sm text-gray-500">{player.position}</div>
-                    </div>
-                    <Plus className="h-4 w-4 text-gray-400" />
-                  </div>
-                ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 flex justify-center">
-          <button
-            onClick={confirmLineup}
-            className="bg-emerald-600 text-white px-6 py-2 rounded-lg hover:bg-emerald-700 transition-colors flex items-center"
-          >
-            <Check className="h-4 w-4 mr-2" />
-            Confirm Lineups
-          </button>
-        </div>
-      </div>
-    );
+  const endGameweekAction = async () => {
+    try {
+      // Update all fantasy team points
+      await updateFantasyTeamPoints();
+      
+      // Increment gameweek in leagues
+      await supabase
+        .from('leagues')
+        .update({ gameweek_current: currentGameweek + 1 });
+      
+      setCurrentGameweek(prev => prev + 1);
+      endGameweek();
+      toast.success('Gameweek ended successfully!');
+    } catch (error) {
+      console.error('Error ending gameweek:', error);
+      toast.error('Failed to end gameweek');
+    }
   };
 
-  const renderSubstitutionModal = () => {
-    if (!substitutionModal.isOpen) return null;
+  const updateFantasyTeamPoints = async () => {
+    // Get all fantasy teams
+    const { data: teams } = await supabase
+      .from('fantasy_teams')
+      .select('*');
 
-    const teamPlayers = substitutionModal.teamId === selectedMatch?.home_team_id ? homePlayers : awayPlayers;
-    const playingPlayers = teamPlayers.filter(p => playerStats[p.player_id]?.is_playing);
-    const benchPlayers = teamPlayers.filter(p => !playerStats[p.player_id]?.is_playing && !playerStats[p.player_id]?.is_starting);
+    if (!teams) return;
 
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-        <div className="bg-white rounded-xl p-6 max-w-md w-full mx-4">
-          <h3 className="text-lg font-semibold text-gray-900 mb-4">
-            Substitution - {substitutionModal.teamName}
-          </h3>
-          
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Player Coming OFF
-              </label>
-              <select
-                id="playerOut"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-              >
-                <option value="">Select player to substitute</option>
-                {playingPlayers.map(player => (
-                  <option key={player.player_id} value={player.player_id}>
-                    {player.name} ({player.position})
-                  </option>
-                ))}
-              </select>
-            </div>
+    for (const team of teams) {
+      // Get team's roster
+      const { data: roster } = await supabase
+        .from('rosters')
+        .select('player_id, is_starter, is_captain, is_vice_captain')
+        .eq('fantasy_team_id', team.fantasy_team_id);
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Player Coming ON
-              </label>
-              <select
-                id="playerIn"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-              >
-                <option value="">Select substitute</option>
-                {benchPlayers.map(player => (
-                  <option key={player.player_id} value={player.player_id}>
-                    {player.name} ({player.position})
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+      if (!roster) continue;
 
-          <div className="mt-6 flex space-x-3">
-            <button
-              onClick={() => {
-                const playerOutSelect = document.getElementById('playerOut') as HTMLSelectElement;
-                const playerInSelect = document.getElementById('playerIn') as HTMLSelectElement;
-                
-                if (playerOutSelect.value && playerInSelect.value) {
-                  handleSubstitution(playerOutSelect.value, playerInSelect.value);
-                } else {
-                  toast.error('Please select both players for the substitution');
-                }
-              }}
-              className="flex-1 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors flex items-center justify-center"
-            >
-              <ArrowLeftRight className="h-4 w-4 mr-2" />
-              Confirm
-            </button>
-            <button
-              onClick={() => setSubstitutionModal({ isOpen: false, teamId: '', teamName: '' })}
-              className="flex-1 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors flex items-center justify-center"
-            >
-              <X className="h-4 w-4 mr-2" />
-              Cancel
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+      let gameweekPoints = 0;
+
+      for (const rosterPlayer of roster) {
+        if (!rosterPlayer.is_starter) continue;
+
+        // Get player's gameweek score
+        const { data: score } = await supabase
+          .from('gameweek_scores')
+          .select('total_points')
+          .eq('player_id', rosterPlayer.player_id)
+          .eq('gameweek', currentGameweek)
+          .single();
+
+        let playerPoints = score?.total_points || 0;
+
+        // Double points for captain
+        if (rosterPlayer.is_captain) {
+          playerPoints *= 2;
+        }
+
+        gameweekPoints += playerPoints;
+      }
+
+      // Update fantasy team points
+      await supabase
+        .from('fantasy_teams')
+        .update({
+          gameweek_points: gameweekPoints,
+          total_points: team.total_points + gameweekPoints
+        })
+        .eq('fantasy_team_id', team.fantasy_team_id);
+    }
   };
 
   if (loading) {
@@ -980,421 +473,228 @@ export default function LiveMatchSimulation() {
 
   return (
     <div className="space-y-6">
-      {/* Admin Gameweek Controls */}
-      <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex flex-col md:flex-row md:items-center md:justify-between">
-        <div>
-          <div className="text-lg font-bold text-emerald-700">Gameweek Status: {gameweekState === 'inside' ? 'Active' : gameweekState === 'paused' ? 'Paused' : 'Not Active'}</div>
-        </div>
-        <div className="mt-4 md:mt-0 flex space-x-2">
-          <button
-            onClick={startGameweek}
-            disabled={gameweekState !== 'outside'}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${gameweekState !== 'outside' ? 'bg-gray-300 text-gray-500' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
-          >
-            Start Gameweek
-          </button>
-          <button
-            onClick={pauseGameweek}
-            disabled={gameweekState !== 'inside'}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${gameweekState !== 'inside' ? 'bg-gray-300 text-gray-500' : 'bg-yellow-500 text-white hover:bg-yellow-600'}`}
-          >
-            Pause Gameweek
-          </button>
-          <button
-            onClick={resumeGameweek}
-            disabled={gameweekState !== 'paused'}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${gameweekState !== 'paused' ? 'bg-gray-300 text-gray-500' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
-          >
-            Resume Gameweek
-          </button>
-          <button
-            onClick={endGameweek}
-            disabled={gameweekState === 'outside'}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${gameweekState === 'outside' ? 'bg-gray-300 text-gray-500' : 'bg-red-600 text-white hover:bg-red-700'}`}
-          >
-            End Gameweek
-          </button>
-        </div>
-      </div>
-
       {/* Header */}
       <div className="bg-white rounded-xl shadow-sm p-6">
-        <h1 className="text-3xl font-bold text-gray-900 mb-2">Live Match Simulation</h1>
-        <p className="text-gray-600">
-          Simulate live matches and calculate player points in real-time. 90 seconds = 90 minutes.
-        </p>
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900 mb-2">Live Match Simulation</h1>
+            <p className="text-gray-600">
+              Simulate matches and generate player performances for Gameweek {currentGameweek}.
+            </p>
+          </div>
+          <div className="flex items-center space-x-4">
+            <div className={`px-4 py-2 rounded-lg text-sm font-medium ${
+              gameweekState === 'inside' ? 'bg-green-100 text-green-800' :
+              gameweekState === 'paused' ? 'bg-yellow-100 text-yellow-800' :
+              'bg-gray-100 text-gray-800'
+            }`}>
+              Gameweek: {gameweekState}
+            </div>
+            {gameweekState === 'inside' && (
+              <button
+                onClick={endGameweekAction}
+                className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+              >
+                End Gameweek
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Match Selection */}
       <div className="bg-white rounded-xl shadow-sm p-6">
         <h2 className="text-xl font-semibold text-gray-900 mb-4">Select Match</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Gameweek
-            </label>
-            <input
-              type="number"
-              value={gameweek}
-              onChange={(e) => setGameweek(parseInt(e.target.value))}
-              min="1"
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Match
-            </label>
-            <select
-              value={selectedMatch?.match_id || ''}
-              onChange={(e) => {
-                const match = matches.find(m => m.match_id === e.target.value);
-                setSelectedMatch(match || null);
-                if (match) {
-                  fetchMatchPlayers(match);
-                }
-              }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {matches.map(match => (
+            <div
+              key={match.match_id}
+              onClick={() => selectMatch(match)}
+              className={`p-4 border rounded-lg cursor-pointer transition-colors ${
+                selectedMatch?.match_id === match.match_id
+                  ? 'border-emerald-500 bg-emerald-50'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
             >
-              <option value="">Select a match</option>
-              {matches.map(match => (
-                <option key={match.match_id} value={match.match_id}>
-                  {match.home_team_name} vs {match.away_team_name} - GW{match.gameweek}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="text-center">
+                <div className="font-semibold text-gray-900 mb-2">
+                  {match.home_team_name || 'TBD'} vs {match.away_team_name || 'TBD'}
+                </div>
+                <div className="text-sm text-gray-500">
+                  Gameweek {match.gameweek}
+                </div>
+                {match.match_date && (
+                  <div className="text-xs text-gray-400 mt-1">
+                    {new Date(match.match_date).toLocaleString()}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Lineup Selection */}
-      {renderLineupSelection()}
-
-      {/* Substitution Modal */}
-      {renderSubstitutionModal()}
-
-      {selectedMatch && lineupSet && (
-        <>
-          {/* Match Controls */}
-          <div className="bg-white rounded-xl shadow-sm p-6">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center space-x-4">
-                <div className="text-2xl font-bold text-gray-900">
-                  {selectedMatch.home_team_name} {homeScore} - {awayScore} {selectedMatch.away_team_name}
-                </div>
-                <div className="flex items-center text-lg text-gray-600">
-                  <Clock className="h-5 w-5 mr-2" />
-                  {currentMinute}'
-                  {isPaused && <span className="ml-2 text-yellow-600 font-medium">PAUSED</span>}
-                  {currentMinute >= 90 && <span className="ml-2 text-red-600 font-medium">FULL TIME</span>}
-                </div>
-                <div className="text-sm text-gray-500">
-                  Subs: {selectedMatch.home_team_name} {homeSubstitutions}/3 | {selectedMatch.away_team_name} {awaySubstitutions}/3
-                </div>
+      {/* Simulation Controls */}
+      {selectedMatch && (
+        <div className="bg-white rounded-xl shadow-sm p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-xl font-semibold text-gray-900">
+              {selectedMatch.home_team_name} vs {selectedMatch.away_team_name}
+            </h2>
+            <div className="flex items-center space-x-4">
+              <div className="text-2xl font-bold text-gray-900">
+                {homeScore} - {awayScore}
               </div>
-              
-              <div className="flex space-x-2">
-                {!isRunning && currentMinute === 0 && (
-                  <button
-                    onClick={startMatch}
-                    className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center"
-                  >
-                    <Play className="h-4 w-4 mr-2" />
-                    Start Match
-                  </button>
-                )}
-                
-                {isRunning && !isPaused && (
-                  <button
-                    onClick={pauseMatch}
-                    className="bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700 transition-colors flex items-center"
-                  >
-                    <Pause className="h-4 w-4 mr-2" />
-                    Pause
-                  </button>
-                )}
-                
-                {isPaused && currentMinute < 90 && (
-                  <button
-                    onClick={resumeMatch}
-                    className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center"
-                  >
-                    <Play className="h-4 w-4 mr-2" />
-                    Resume
-                  </button>
-                )}
-                
-                {(isRunning || isPaused) && (
-                  <button
-                    onClick={stopMatch}
-                    className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center"
-                  >
-                    <Square className="h-4 w-4 mr-2" />
-                    Stop
-                  </button>
-                )}
-                
-                {currentMinute >= 90 && (
-                  <button
-                    onClick={saveMatchResults}
-                    className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors flex items-center"
-                  >
-                    <Trophy className="h-4 w-4 mr-2" />
-                    Save Results
-                  </button>
-                )}
-                
-                <button
-                  onClick={resetSimulation}
-                  className="bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
-                >
-                  Reset
-                </button>
+              <div className="flex items-center text-sm text-gray-600">
+                <Clock className="h-4 w-4 mr-1" />
+                {currentMinute}'
               </div>
-            </div>
-
-            {/* Progress Bar */}
-            <div className="w-full bg-gray-200 rounded-full h-2 mb-4">
-              <div 
-                className="bg-emerald-600 h-2 rounded-full transition-all duration-1000"
-                style={{ width: `${(currentMinute / 90) * 100}%` }}
-              ></div>
             </div>
           </div>
 
-          {/* Quick Actions */}
-          {currentMinute > 0 && currentMinute < 90 && (
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions (Playing Players Only)</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
-                {[...homePlayers, ...awayPlayers]
-                  .filter(player => playerStats[player.player_id]?.is_playing)
-                  .map(player => (
-                  <div key={player.player_id} className="relative">
-                    <select
-                      onChange={(e) => {
-                        const value = e.target.value;
-                        if (value) {
-                          addMatchEvent(value as MatchEvent['type'], player.player_id);
-                          // Reset the select value to prevent double execution
-                          e.target.value = '';
-                        }
-                      }}
-                      className="w-full text-xs px-2 py-1 border border-gray-300 rounded focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500"
-                    >
-                      <option value="">{player.name.split(' ')[0]}</option>
-                      <option value="goal">Goal</option>
-                      <option value="assist">Assist</option>
-                      <option value="yellow_card">Yellow Card</option>
-                      <option value="red_card">Red Card</option>
-                      <option value="substitution">Substitution</option>
-                      {player.position === 'GK' && (
-                        <>
-                          <option value="save">Save</option>
-                          <option value="penalty_save">Penalty Save</option>
-                        </>
-                      )}
-                      <option value="penalty_miss">Penalty Miss</option>
-                      <option value="own_goal">Own Goal</option>
-                    </select>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Controls */}
+          <div className="flex space-x-4 mb-6">
+            {!isSimulating ? (
+              <button
+                onClick={startSimulation}
+                className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors flex items-center"
+              >
+                <Play className="h-4 w-4 mr-2" />
+                Start Simulation
+              </button>
+            ) : (
+              <button
+                onClick={pauseSimulation}
+                className="bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700 transition-colors flex items-center"
+              >
+                <Pause className="h-4 w-4 mr-2" />
+                Pause
+              </button>
+            )}
+            
+            {gameweekState === 'paused' && (
+              <button
+                onClick={resumeSimulation}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center"
+              >
+                <Play className="h-4 w-4 mr-2" />
+                Resume
+              </button>
+            )}
+            
+            <button
+              onClick={stopSimulation}
+              className="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors flex items-center"
+            >
+              <Square className="h-4 w-4 mr-2" />
+              Stop
+            </button>
+          </div>
 
-          {/* Teams and Player Stats */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Lineups */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
             {/* Home Team */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                <Users className="h-5 w-5 mr-2" />
-                {selectedMatch.home_team_name}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                {selectedMatch.home_team_name} (Home)
               </h3>
-              
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-green-700 mb-2">Playing XI</div>
-                {homePlayers
-                  .filter(p => playerStats[p.player_id]?.is_playing)
-                  .sort((a, b) => {
-                    const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                    return order[a.position] - order[b.position];
-                  })
-                  .map(player => {
-                    const stats = playerStats[player.player_id];
-                    return (
-                      <div key={player.player_id} className="p-3 rounded-lg border bg-green-50 border-green-200">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="font-medium text-gray-900">
-                              {player.name}
-                              {stats?.is_starting && <span className="ml-1 text-xs text-green-600">(S)</span>}
-                              {stats?.substitute_for && <span className="ml-1 text-xs text-blue-600">(Sub)</span>}
-                            </div>
-                            <div className="text-sm text-gray-500">{player.position}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-bold text-emerald-600">{stats?.total_points || 0} pts</div>
-                            <div className="text-xs text-gray-500">{stats?.minutes_played || 0}'</div>
-                          </div>
+              <div className="space-y-4">
+                <div>
+                  <h4 className="font-medium text-gray-700 mb-2">Starting XI</h4>
+                  <div className="space-y-2">
+                    {homeLineup.starters.map(player => (
+                      <div key={player.player_id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <div>
+                          <span className="font-medium">{player.name}</span>
+                          <span className="ml-2 text-sm text-gray-500">({player.position})</span>
                         </div>
-                        {stats && (
-                          <div className="mt-2 text-xs text-gray-600 grid grid-cols-4 gap-2">
-                            <div>G: {stats.goals}</div>
-                            <div>A: {stats.assists}</div>
-                            <div>YC: {stats.yellow_cards}</div>
-                            <div>RC: {stats.red_cards}</div>
-                          </div>
-                        )}
                       </div>
-                    );
-                  })}
-                
-                <div className="text-sm font-medium text-gray-700 mb-2 mt-4">Bench</div>
-                {homePlayers
-                  .filter(p => !playerStats[p.player_id]?.is_playing)
-                  .sort((a, b) => {
-                    const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                    return order[a.position] - order[b.position];
-                  })
-                  .map(player => {
-                    const stats = playerStats[player.player_id];
-                    return (
-                      <div key={player.player_id} className="p-3 rounded-lg border bg-gray-50 border-gray-200">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="font-medium text-gray-900">{player.name}</div>
-                            <div className="text-sm text-gray-500">{player.position}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-bold text-emerald-600">{stats?.total_points || 0} pts</div>
-                            <div className="text-xs text-gray-500">{stats?.minutes_played || 0}'</div>
-                          </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="font-medium text-gray-700 mb-2">Bench</h4>
+                  <div className="space-y-2">
+                    {homeLineup.bench.slice(0, 7).map(player => (
+                      <div key={player.player_id} className="flex items-center justify-between p-2 bg-gray-100 rounded">
+                        <div>
+                          <span className="text-sm">{player.name}</span>
+                          <span className="ml-2 text-xs text-gray-500">({player.position})</span>
                         </div>
-                        {stats && stats.minutes_played > 0 && (
-                          <div className="mt-2 text-xs text-gray-600 grid grid-cols-4 gap-2">
-                            <div>G: {stats.goals}</div>
-                            <div>A: {stats.assists}</div>
-                            <div>YC: {stats.yellow_cards}</div>
-                            <div>RC: {stats.red_cards}</div>
-                          </div>
-                        )}
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Away Team */}
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                <Users className="h-5 w-5 mr-2" />
-                {selectedMatch.away_team_name}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">
+                {selectedMatch.away_team_name} (Away)
               </h3>
-              
-              <div className="space-y-2">
-                <div className="text-sm font-medium text-blue-700 mb-2">Playing XI</div>
-                {awayPlayers
-                  .filter(p => playerStats[p.player_id]?.is_playing)
-                  .sort((a, b) => {
-                    const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                    return order[a.position] - order[b.position];
-                  })
-                  .map(player => {
-                    const stats = playerStats[player.player_id];
-                    return (
-                      <div key={player.player_id} className="p-3 rounded-lg border bg-blue-50 border-blue-200">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="font-medium text-gray-900">
-                              {player.name}
-                              {stats?.is_starting && <span className="ml-1 text-xs text-blue-600">(S)</span>}
-                              {stats?.substitute_for && <span className="ml-1 text-xs text-green-600">(Sub)</span>}
-                            </div>
-                            <div className="text-sm text-gray-500">{player.position}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-bold text-emerald-600">{stats?.total_points || 0} pts</div>
-                            <div className="text-xs text-gray-500">{stats?.minutes_played || 0}'</div>
-                          </div>
+              <div className="space-y-4">
+                <div>
+                  <h4 className="font-medium text-gray-700 mb-2">Starting XI</h4>
+                  <div className="space-y-2">
+                    {awayLineup.starters.map(player => (
+                      <div key={player.player_id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <div>
+                          <span className="font-medium">{player.name}</span>
+                          <span className="ml-2 text-sm text-gray-500">({player.position})</span>
                         </div>
-                        {stats && (
-                          <div className="mt-2 text-xs text-gray-600 grid grid-cols-4 gap-2">
-                            <div>G: {stats.goals}</div>
-                            <div>A: {stats.assists}</div>
-                            <div>YC: {stats.yellow_cards}</div>
-                            <div>RC: {stats.red_cards}</div>
-                          </div>
-                        )}
                       </div>
-                    );
-                  })}
-                
-                <div className="text-sm font-medium text-gray-700 mb-2 mt-4">Bench</div>
-                {awayPlayers
-                  .filter(p => !playerStats[p.player_id]?.is_playing)
-                  .sort((a, b) => {
-                    const order = { GK: 1, DEF: 2, MID: 3, FWD: 4 };
-                    return order[a.position] - order[b.position];
-                  })
-                  .map(player => {
-                    const stats = playerStats[player.player_id];
-                    return (
-                      <div key={player.player_id} className="p-3 rounded-lg border bg-gray-50 border-gray-200">
-                        <div className="flex justify-between items-center">
-                          <div>
-                            <div className="font-medium text-gray-900">{player.name}</div>
-                            <div className="text-sm text-gray-500">{player.position}</div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-bold text-emerald-600">{stats?.total_points || 0} pts</div>
-                            <div className="text-xs text-gray-500">{stats?.minutes_played || 0}'</div>
-                          </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <h4 className="font-medium text-gray-700 mb-2">Bench</h4>
+                  <div className="space-y-2">
+                    {awayLineup.bench.slice(0, 7).map(player => (
+                      <div key={player.player_id} className="flex items-center justify-between p-2 bg-gray-100 rounded">
+                        <div>
+                          <span className="text-sm">{player.name}</span>
+                          <span className="ml-2 text-xs text-gray-500">({player.position})</span>
                         </div>
-                        {stats && stats.minutes_played > 0 && (
-                          <div className="mt-2 text-xs text-gray-600 grid grid-cols-4 gap-2">
-                            <div>G: {stats.goals}</div>
-                            <div>A: {stats.assists}</div>
-                            <div>YC: {stats.yellow_cards}</div>
-                            <div>RC: {stats.red_cards}</div>
-                          </div>
-                        )}
                       </div>
-                    );
-                  })}
+                    ))}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
 
           {/* Match Events */}
-          {matchEvents.length > 0 && (
-            <div className="bg-white rounded-xl shadow-sm p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                <AlertTriangle className="h-5 w-5 mr-2" />
-                Match Events
-              </h3>
+          {events.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Match Events</h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
-                {matchEvents.slice().reverse().map(event => (
-                  <div key={event.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                    <div className="flex items-center space-x-3">
-                      <span className="font-medium text-gray-900">{event.minute}'</span>
-                      <span className="text-gray-600">{event.description}</span>
+                {events.map((event, index) => (
+                  <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                    <div className="flex items-center">
+                      <div className="w-8 h-8 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center text-sm font-medium mr-3">
+                        {event.minute}'
+                      </div>
+                      <div>
+                        <div className="font-medium">{event.description}</div>
+                        <div className="text-sm text-gray-500">{event.team}</div>
+                      </div>
                     </div>
-                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                    <div className={`px-2 py-1 rounded text-xs font-medium ${
                       event.type === 'goal' ? 'bg-green-100 text-green-800' :
+                      event.type === 'assist' ? 'bg-blue-100 text-blue-800' :
                       event.type === 'yellow_card' ? 'bg-yellow-100 text-yellow-800' :
                       event.type === 'red_card' ? 'bg-red-100 text-red-800' :
-                      event.type === 'substitution' ? 'bg-purple-100 text-purple-800' :
-                      'bg-blue-100 text-blue-800'
+                      'bg-gray-100 text-gray-800'
                     }`}>
                       {event.type.replace('_', ' ').toUpperCase()}
-                    </span>
+                    </div>
                   </div>
                 ))}
               </div>
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );

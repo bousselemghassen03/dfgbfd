@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Users, DollarSign, Trophy, Calendar, Edit, Save, X, Plus, Minus, Crown, Star } from 'lucide-react';
+import { Users, DollarSign, Trophy, Calendar, Edit, Save, X, Plus, Minus, Crown, Star, ArrowRightLeft } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { Player, Team, FantasyTeam, Roster } from '../../types/database';
 import { useAuth } from '../../contexts/AuthContext';
 import TeamCreation from './TeamCreation';
 import PlayerProfileModal from './PlayerProfileModal';
+import TransferSystem from './TransferSystem';
 import toast from 'react-hot-toast';
 import { useGameweek } from '../../contexts/GameweekContext';
 
@@ -22,20 +23,13 @@ export default function MyTeam() {
   const [fantasyTeam, setFantasyTeam] = useState<FantasyTeam | null>(null);
   const [roster, setRoster] = useState<RosterPlayer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editMode, setEditMode] = useState(false);
-  const [availablePlayers, setAvailablePlayers] = useState<PlayerWithTeam[]>([]);
-  const [showPlayerModal, setShowPlayerModal] = useState(false);
-  const [selectedPosition, setSelectedPosition] = useState<string>('');
-  const [replacingRosterId, setReplacingRosterId] = useState<string | null>(null);
   const [selectedPlayerForProfile, setSelectedPlayerForProfile] = useState<PlayerWithTeam | null>(null);
   const [showPlayerProfile, setShowPlayerProfile] = useState(false);
+  const [showTransfers, setShowTransfers] = useState(false);
   const { gameweekState } = useGameweek();
   const [currentGameweek, setCurrentGameweek] = useState<number>(1);
   const [playerPoints, setPlayerPoints] = useState<any[]>([]);
   const [loadingPoints, setLoadingPoints] = useState(false);
-
-  const TRANSFER_DEADLINE = new Date('2025-06-30');
-  const canMakeChanges = new Date() <= TRANSFER_DEADLINE;
 
   useEffect(() => {
     if (user) {
@@ -79,7 +73,7 @@ export default function MyTeam() {
       // Get roster
       const { data: roster } = await supabase
         .from('rosters')
-        .select('player_id, player:player_id(*)')
+        .select('player_id, is_starter, player:player_id(*)')
         .eq('fantasy_team_id', teamData.fantasy_team_id);
       if (!roster) {
         setPlayerPoints([]);
@@ -101,6 +95,7 @@ export default function MyTeam() {
           position: r.player.position,
           team: r.player.team_id,
           points: score?.total_points ?? 0,
+          is_starter: r.is_starter,
         };
       });
       setPlayerPoints(pointsTable);
@@ -185,34 +180,6 @@ export default function MyTeam() {
     }
   };
 
-  const fetchAvailablePlayers = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('players')
-        .select(`
-          *,
-          teams:team_id (
-            name,
-            jersey
-          )
-        `)
-        .order('name');
-
-      if (error) throw error;
-
-      const playersWithTeamNames = data?.map(player => ({
-        ...player,
-        team_name: player.teams?.name,
-        team_jersey: player.teams?.jersey
-      })) || [];
-
-      setAvailablePlayers(playersWithTeamNames);
-    } catch (error) {
-      console.error('Error fetching players:', error);
-      toast.error('Failed to fetch players');
-    }
-  };
-
   const getPlayersByPosition = (position: string, isStarter: boolean) => {
     return roster.filter(r => 
       r.player?.position === position && 
@@ -227,56 +194,6 @@ export default function MyTeam() {
       midfielders: starters.filter(r => r.player?.position === 'MID').length,
       forwards: starters.filter(r => r.player?.position === 'FWD').length,
     };
-  };
-
-  const calculateBudgetAfterTransfer = (outgoingPlayer: PlayerWithTeam, incomingPlayer: PlayerWithTeam) => {
-    const currentBudget = fantasyTeam?.budget_remaining || 0;
-    const priceDifference = incomingPlayer.price - outgoingPlayer.price;
-    return currentBudget - priceDifference;
-  };
-
-  const handlePlayerReplace = async (rosterId: string, newPlayerId: string) => {
-    if (!rosterId || !newPlayerId) {
-      toast.error('Invalid player selection');
-      return;
-    }
-
-    try {
-      const { error } = await supabase
-        .from('rosters')
-        .update({ player_id: newPlayerId })
-        .eq('roster_id', rosterId);
-
-      if (error) throw error;
-
-      // Update budget after successful transfer
-      const outgoingPlayer = roster.find(r => r.roster_id === rosterId)?.player;
-      const incomingPlayer = availablePlayers.find(p => p.player_id === newPlayerId);
-      
-      if (outgoingPlayer && incomingPlayer && fantasyTeam) {
-        const newBudget = calculateBudgetAfterTransfer(outgoingPlayer, incomingPlayer);
-        
-        const { error: budgetError } = await supabase
-          .from('fantasy_teams')
-          .update({ budget_remaining: newBudget })
-          .eq('fantasy_team_id', fantasyTeam.fantasy_team_id);
-
-        if (budgetError) throw budgetError;
-        
-        // Update local state
-        setFantasyTeam(prev => prev ? { ...prev, budget_remaining: newBudget } : null);
-      }
-
-      toast.success('Player replaced successfully');
-      if (fantasyTeam) {
-        await fetchRoster(fantasyTeam.fantasy_team_id);
-      }
-      setShowPlayerModal(false);
-      setReplacingRosterId(null);
-    } catch (error) {
-      console.error('Error replacing player:', error);
-      toast.error('Failed to replace player');
-    }
   };
 
   const setCaptain = async (rosterId: string) => {
@@ -341,16 +258,11 @@ export default function MyTeam() {
     fetchFantasyTeam();
   };
 
-  const openPlayerModal = (rosterId: string, position: string) => {
-    setReplacingRosterId(rosterId);
-    setSelectedPosition(position);
-    setShowPlayerModal(true);
-  };
-
-  const closePlayerModal = () => {
-    setShowPlayerModal(false);
-    setReplacingRosterId(null);
-    setSelectedPosition('');
+  const canMakeChanges = () => {
+    if (currentGameweek === 1) {
+      return gameweekState === 'outside'; // Unlimited transfers before GW1
+    }
+    return gameweekState === 'outside'; // Only between gameweeks
   };
 
   if (loading) {
@@ -374,39 +286,72 @@ export default function MyTeam() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 bg-gradient-to-br from-slate-50 to-blue-50 min-h-screen p-4">
-      {/* New: Gameweek Points Table */}
+      {/* Transfer System Modal */}
+      {showTransfers && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-6xl max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-900">Transfer System</h2>
+                <button
+                  onClick={() => setShowTransfers(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-6 w-6" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6">
+              <TransferSystem />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Points Table */}
       {gameweekState === 'inside' && (
         <div className="bg-white rounded-xl shadow-sm overflow-hidden mb-6">
           <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
-            <div className="text-lg font-bold text-emerald-700">Current Gameweek Player Points</div>
+            <div className="text-lg font-bold text-emerald-700">Live Gameweek Points</div>
             <div className="text-sm text-gray-500">Gameweek {currentGameweek}</div>
           </div>
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Player</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {loadingPoints ? (
-                <tr><td colSpan={3} className="text-center py-8">Loading...</td></tr>
-              ) : playerPoints.length === 0 ? (
-                <tr><td colSpan={3} className="text-center py-8 text-gray-500">No data yet</td></tr>
-              ) : (
-                playerPoints.map((p, i) => (
-                  <tr key={i} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{p.name}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{p.position}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-emerald-700 font-bold">{p.points}</td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Player</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Points</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {loadingPoints ? (
+                  <tr><td colSpan={4} className="text-center py-8">Loading...</td></tr>
+                ) : playerPoints.length === 0 ? (
+                  <tr><td colSpan={4} className="text-center py-8 text-gray-500">No data yet</td></tr>
+                ) : (
+                  playerPoints.map((p, i) => (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{p.name}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{p.position}</td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          p.is_starter ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                        }`}>
+                          {p.is_starter ? 'Starting' : 'Bench'}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-emerald-700 font-bold">{p.points}</td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
+
       {/* Team Header */}
       <div className="bg-gradient-to-r from-emerald-500 to-blue-600 rounded-2xl shadow-lg p-6 text-white">
         <div className="flex justify-between items-start mb-4">
@@ -415,31 +360,13 @@ export default function MyTeam() {
             <p className="text-emerald-100">Your Fantasy Soccer Team</p>
           </div>
           <div className="flex items-center space-x-4">
-            {canMakeChanges && (
+            {canMakeChanges() && (
               <button
-                onClick={() => {
-                  setEditMode(!editMode);
-                  if (!editMode) {
-                    fetchAvailablePlayers();
-                  }
-                }}
-                className={`px-6 py-3 rounded-xl transition-all duration-200 flex items-center font-medium ${
-                  editMode 
-                    ? 'bg-red-500 hover:bg-red-600 shadow-lg' 
-                    : 'bg-white/20 hover:bg-white/30 backdrop-blur-sm'
-                }`}
+                onClick={() => setShowTransfers(true)}
+                className="bg-white/20 hover:bg-white/30 backdrop-blur-sm px-6 py-3 rounded-xl transition-all duration-200 flex items-center font-medium"
               >
-                {editMode ? (
-                  <>
-                    <X className="h-4 w-4 mr-2" />
-                    Cancel
-                  </>
-                ) : (
-                  <>
-                    <Edit className="h-4 w-4 mr-2" />
-                    Edit Team
-                  </>
-                )}
+                <ArrowRightLeft className="h-4 w-4 mr-2" />
+                Transfers
               </button>
             )}
           </div>
@@ -488,13 +415,30 @@ export default function MyTeam() {
           </div>
         </div>
 
-        {!canMakeChanges && (
-          <div className="mt-4 p-3 bg-yellow-500/20 border border-yellow-400/30 rounded-xl backdrop-blur-sm">
-            <p className="text-yellow-100 text-sm">
-              Transfer deadline has passed. You can no longer make changes to your team.
-            </p>
-          </div>
-        )}
+        {/* Transfer Status */}
+        <div className="mt-4">
+          {gameweekState === 'inside' && (
+            <div className="p-3 bg-red-500/20 border border-red-400/30 rounded-xl backdrop-blur-sm">
+              <p className="text-red-100 text-sm">
+                Gameweek is active. No transfers allowed until gameweek ends.
+              </p>
+            </div>
+          )}
+          {gameweekState === 'outside' && currentGameweek === 1 && (
+            <div className="p-3 bg-green-500/20 border border-green-400/30 rounded-xl backdrop-blur-sm">
+              <p className="text-green-100 text-sm">
+                Unlimited transfers available before Gameweek 1 starts.
+              </p>
+            </div>
+          )}
+          {gameweekState === 'outside' && currentGameweek > 1 && (
+            <div className="p-3 bg-blue-500/20 border border-blue-400/30 rounded-xl backdrop-blur-sm">
+              <p className="text-blue-100 text-sm">
+                Transfer window is open. You have {fantasyTeam.transfers_remaining} transfer(s) remaining.
+              </p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Formation and Pitch */}
@@ -535,8 +479,7 @@ export default function MyTeam() {
                 <PlayerCard
                   key={rosterPlayer.roster_id}
                   rosterPlayer={rosterPlayer}
-                  editMode={editMode}
-                  onReplace={() => openPlayerModal(rosterPlayer.roster_id, 'GK')}
+                  canMakeChanges={canMakeChanges()}
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
@@ -550,8 +493,7 @@ export default function MyTeam() {
                 <PlayerCard
                   key={rosterPlayer.roster_id}
                   rosterPlayer={rosterPlayer}
-                  editMode={editMode}
-                  onReplace={() => openPlayerModal(rosterPlayer.roster_id, 'DEF')}
+                  canMakeChanges={canMakeChanges()}
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
@@ -565,8 +507,7 @@ export default function MyTeam() {
                 <PlayerCard
                   key={rosterPlayer.roster_id}
                   rosterPlayer={rosterPlayer}
-                  editMode={editMode}
-                  onReplace={() => openPlayerModal(rosterPlayer.roster_id, 'MID')}
+                  canMakeChanges={canMakeChanges()}
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
@@ -580,8 +521,7 @@ export default function MyTeam() {
                 <PlayerCard
                   key={rosterPlayer.roster_id}
                   rosterPlayer={rosterPlayer}
-                  editMode={editMode}
-                  onReplace={() => openPlayerModal(rosterPlayer.roster_id, 'FWD')}
+                  canMakeChanges={canMakeChanges()}
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
@@ -654,105 +594,11 @@ export default function MyTeam() {
                     {rosterPlayer.player?.position}
                   </span>
                 </div>
-
-                {editMode && canMakeChanges && (
-                  <button
-                    onClick={() => openPlayerModal(rosterPlayer.roster_id, rosterPlayer.player?.position || '')}
-                    className="mt-2 text-emerald-600 hover:text-emerald-700 text-xs bg-emerald-50 px-2 py-1 rounded-full hover:bg-emerald-100 transition-colors"
-                  >
-                    <Edit className="h-3 w-3" />
-                  </button>
-                )}
               </div>
             </div>
           ))}
         </div>
       </div>
-
-      {/* Player Replacement Modal */}
-      {showPlayerModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-4xl max-h-[80vh] overflow-y-auto shadow-2xl">
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <h3 className="text-xl font-semibold text-gray-800">Replace {selectedPosition} Player</h3>
-                {fantasyTeam && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    Current Budget: £{fantasyTeam.budget_remaining}M
-                  </p>
-                )}
-              </div>
-              <button onClick={closePlayerModal} className="text-gray-400 hover:text-gray-600 transition-colors">
-                <X className="h-6 w-6" />
-              </button>
-            </div>
-            
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {availablePlayers
-                .filter(player => player.position === selectedPosition)
-                .map((player) => {
-                  const currentPlayer = roster.find(r => r.roster_id === replacingRosterId)?.player;
-                  const budgetAfterTransfer = currentPlayer ? calculateBudgetAfterTransfer(currentPlayer, player) : fantasyTeam?.budget_remaining || 0;
-                  const canAfford = budgetAfterTransfer >= 0;
-                  const priceDifference = currentPlayer ? player.price - currentPlayer.price : 0;
-                  
-                  return (
-                    <div key={player.player_id} className={`flex items-center justify-between p-4 border rounded-xl transition-all duration-200 ${
-                      canAfford ? 'hover:bg-emerald-50 border-gray-200 hover:border-emerald-300' : 'bg-red-50 border-red-200'
-                    }`}>
-                      <div className="flex items-center space-x-4">
-                        <div className="w-16 h-20 flex-shrink-0">
-                          {player.team_jersey ? (
-                            <img
-                              src={player.team_jersey}
-                              alt={`${player.team_name} jersey`}
-                              className="w-full h-full object-contain"
-                              onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                                e.currentTarget.nextElementSibling!.style.display = 'flex';
-                              }}
-                            />
-                          ) : null}
-                          <div className={`w-full h-full bg-gray-300 rounded-lg flex items-center justify-center ${
-                            player.team_jersey ? 'hidden' : 'flex'
-                          }`}>
-                            <span className="text-xs text-gray-500">No Jersey</span>
-                          </div>
-                        </div>
-                        <div className="flex-1">
-                          <div className="font-medium text-gray-900">{player.name}</div>
-                          <div className="text-sm text-gray-500">{player.team_name}</div>
-                          <div className="text-sm font-medium text-gray-700">£{player.price}M</div>
-                          {priceDifference !== 0 && (
-                            <div className={`text-xs ${priceDifference > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                              {priceDifference > 0 ? '+' : ''}£{priceDifference.toFixed(1)}M
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-sm text-gray-600 mb-2">
-                          Budget after: £{budgetAfterTransfer.toFixed(1)}M
-                        </div>
-                        <button
-                          onClick={() => replacingRosterId && handlePlayerReplace(replacingRosterId, player.player_id)}
-                          disabled={!canAfford}
-                          className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                            canAfford 
-                              ? 'bg-emerald-600 text-white hover:bg-emerald-700' 
-                              : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                          }`}
-                        >
-                          {canAfford ? 'Select' : 'Can\'t Afford'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Player Profile Modal */}
       {showPlayerProfile && selectedPlayerForProfile && (
@@ -771,14 +617,13 @@ export default function MyTeam() {
 // Player Card Component
 interface PlayerCardProps {
   rosterPlayer: RosterPlayer;
-  editMode: boolean;
-  onReplace: () => void;
+  canMakeChanges: boolean;
   onSetCaptain: () => void;
   onSetViceCaptain: () => void;
   onPlayerClick: () => void;
 }
 
-function PlayerCard({ rosterPlayer, editMode, onReplace, onSetCaptain, onSetViceCaptain, onPlayerClick }: PlayerCardProps) {
+function PlayerCard({ rosterPlayer, canMakeChanges, onSetCaptain, onSetViceCaptain, onPlayerClick }: PlayerCardProps) {
   return (
     <div className="relative flex flex-col items-center">
       {/* Player Jersey - Bigger Size */}
@@ -831,14 +676,8 @@ function PlayerCard({ rosterPlayer, editMode, onReplace, onSetCaptain, onSetVice
         </div>
       </div>
 
-      {editMode && (
+      {canMakeChanges && (
         <div className="mt-2 flex space-x-1">
-          <button
-            onClick={onReplace}
-            className="bg-emerald-500 text-white px-2 py-1 rounded-lg text-xs hover:bg-emerald-600 transition-colors shadow-md"
-          >
-            Replace
-          </button>
           <button
             onClick={onSetCaptain}
             className="bg-yellow-500 text-white px-2 py-1 rounded-lg text-xs hover:bg-yellow-600 transition-colors shadow-md"
