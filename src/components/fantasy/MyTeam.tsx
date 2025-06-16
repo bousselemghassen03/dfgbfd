@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, DollarSign, Trophy, Calendar, Edit, Save, X, Plus, Minus, Crown, Star, ArrowRightLeft } from 'lucide-react';
+import { Users, DollarSign, Trophy, Calendar, Edit, Save, X, Plus, Minus, Crown, Star, ArrowRightLeft, Globe } from 'lucide-react'; // Added Globe icon
 import { supabase } from '../../lib/supabase';
 import { Player, Team, FantasyTeam, Roster } from '../../types/database';
 import { useAuth } from '../../contexts/AuthContext';
@@ -8,6 +8,7 @@ import PlayerProfileModal from './PlayerProfileModal';
 import TransferSystem from './TransferSystem';
 import toast from 'react-hot-toast';
 import { useGameweek } from '../../contexts/GameweekContext';
+import { useLanguage } from '../../contexts/LanguageContext'; // Import useLanguage hook
 
 interface PlayerWithTeam extends Player {
   team_name?: string;
@@ -20,6 +21,7 @@ interface RosterPlayer extends Roster {
 
 export default function MyTeam() {
   const { user } = useAuth();
+  const { t, setLanguage, language, loadingTranslations } = useLanguage(); // Use the language hook
   const [fantasyTeam, setFantasyTeam] = useState<FantasyTeam | null>(null);
   const [roster, setRoster] = useState<RosterPlayer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,7 +141,7 @@ export default function MyTeam() {
       }
     } catch (error) {
       console.error('Error fetching fantasy team:', error);
-      toast.error('Failed to fetch your team');
+      toast.error(t('Error fetching fantasy team')); // Translated toast
     } finally {
       setLoading(false);
     }
@@ -176,13 +178,13 @@ export default function MyTeam() {
       setRoster(rosterWithTeamNames);
     } catch (error) {
       console.error('Error fetching roster:', error);
-      toast.error('Failed to fetch roster');
+      toast.error(t('Failed to fetch roster')); // Translated toast
     }
   };
 
   const getPlayersByPosition = (position: string, isStarter: boolean) => {
-    return roster.filter(r => 
-      r.player?.position === position && 
+    return roster.filter(r =>
+      r.player?.position === position &&
       r.is_starter === isStarter
     );
   };
@@ -212,13 +214,13 @@ export default function MyTeam() {
 
       if (error) throw error;
 
-      toast.success('Captain updated');
+      toast.success(t('Captain updated')); // Translated toast
       if (fantasyTeam) {
         await fetchRoster(fantasyTeam.fantasy_team_id);
       }
     } catch (error) {
       console.error('Error setting captain:', error);
-      toast.error('Failed to set captain');
+      toast.error(t('Failed to set captain')); // Translated toast
     }
   };
 
@@ -238,13 +240,13 @@ export default function MyTeam() {
 
       if (error) throw error;
 
-      toast.success('Vice captain updated');
+      toast.success(t('Vice captain updated')); // Translated toast
       if (fantasyTeam) {
         await fetchRoster(fantasyTeam.fantasy_team_id);
       }
     } catch (error) {
       console.error('Error setting vice captain:', error);
-      toast.error('Failed to set vice captain');
+      toast.error(t('Failed to set vice captain')); // Translated toast
     }
   };
 
@@ -265,10 +267,11 @@ export default function MyTeam() {
     return gameweekState === 'outside'; // Only between gameweeks
   };
 
-  if (loading) {
+  if (loading || loadingTranslations) { // Also check for loading translations
     return (
       <div className="flex justify-center items-center h-64">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-600"></div>
+        <p className="ml-3 text-gray-700">{t('Loading...')}</p> {/* Translated loading message */}
       </div>
     );
   }
@@ -286,13 +289,44 @@ export default function MyTeam() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 bg-gradient-to-br from-slate-50 to-blue-50 min-h-screen p-4">
+      {/* Language Buttons */}
+      <div className="flex justify-end space-x-2 mb-4">
+        <button
+          onClick={() => setLanguage('en')}
+          className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+            language === 'en' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+          disabled={loadingTranslations}
+        >
+          EN
+        </button>
+        <button
+          onClick={() => setLanguage('fr')}
+          className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+            language === 'fr' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+          disabled={loadingTranslations}
+        >
+          FR
+        </button>
+        <button
+          onClick={() => setLanguage('ar')}
+          className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+            language === 'ar' ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          }`}
+          disabled={loadingTranslations}
+        >
+          TN (عربي)
+        </button>
+      </div>
+
       {/* Transfer System Modal */}
       {showTransfers && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-6xl max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b">
               <div className="flex justify-between items-center">
-                <h2 className="text-xl font-semibold text-gray-900">Transfer System</h2>
+                <h2 className="text-xl font-semibold text-gray-900">{t('Transfer System')}</h2>
                 <button
                   onClick={() => setShowTransfers(false)}
                   className="text-gray-400 hover:text-gray-600"
@@ -314,7 +348,7 @@ export default function MyTeam() {
         <div className="flex justify-between items-start mb-4">
           <div>
             <h1 className="text-3xl font-bold">{fantasyTeam.team_name}</h1>
-            <p className="text-emerald-100">Your Fantasy Soccer Team</p>
+            <p className="text-emerald-100">{t('Your Fantasy Soccer Team')}</p>
           </div>
           <div className="flex items-center space-x-4">
             {canMakeChanges() && (
@@ -323,7 +357,7 @@ export default function MyTeam() {
                 className="bg-white/20 hover:bg-white/30 backdrop-blur-sm px-6 py-3 rounded-xl transition-all duration-200 flex items-center font-medium"
               >
                 <ArrowRightLeft className="h-4 w-4 mr-2" />
-                Transfers
+                {t('Transfers')}
               </button>
             )}
           </div>
@@ -335,37 +369,37 @@ export default function MyTeam() {
             <div className="flex items-center">
               <Trophy className="h-5 w-5 mr-2" />
               <div>
-                <p className="text-sm text-emerald-100">Total Points</p>
+                <p className="text-sm text-emerald-100">{t('Total Points')}</p>
                 <p className="text-lg font-semibold">{fantasyTeam.total_points}</p>
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white/20 backdrop-blur-sm p-4 rounded-xl border border-white/20">
             <div className="flex items-center">
               <Calendar className="h-5 w-5 mr-2" />
               <div>
-                <p className="text-sm text-emerald-100">This Gameweek</p>
+                <p className="text-sm text-emerald-100">{t('This Gameweek')}</p>
                 <p className="text-lg font-semibold">{fantasyTeam.gameweek_points}</p>
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white/20 backdrop-blur-sm p-4 rounded-xl border border-white/20">
             <div className="flex items-center">
               <DollarSign className="h-5 w-5 mr-2" />
               <div>
-                <p className="text-sm text-emerald-100">Budget Left</p>
+                <p className="text-sm text-emerald-100">{t('Budget Left')}</p>
                 <p className="text-lg font-semibold">£{fantasyTeam.budget_remaining}M</p>
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white/20 backdrop-blur-sm p-4 rounded-xl border border-white/20">
             <div className="flex items-center">
               <Users className="h-5 w-5 mr-2" />
               <div>
-                <p className="text-sm text-emerald-100">Rank</p>
+                <p className="text-sm text-emerald-100">{t('Rank')}</p>
                 <p className="text-lg font-semibold">#{fantasyTeam.rank}</p>
               </div>
             </div>
@@ -377,21 +411,22 @@ export default function MyTeam() {
           {gameweekState === 'inside' && (
             <div className="p-3 bg-red-500/20 border border-red-400/30 rounded-xl backdrop-blur-sm">
               <p className="text-red-100 text-sm">
-                Gameweek is active. No transfers allowed until gameweek ends.
+                {t('Gameweek is active. No transfers allowed until gameweek ends.')}
               </p>
             </div>
           )}
           {gameweekState === 'outside' && currentGameweek === 1 && (
             <div className="p-3 bg-green-500/20 border border-green-400/30 rounded-xl backdrop-blur-sm">
               <p className="text-green-100 text-sm">
-                Unlimited transfers available before Gameweek 1 starts.
+                {t('Unlimited transfers available before Gameweek 1 starts.')}
               </p>
             </div>
           )}
           {gameweekState === 'outside' && currentGameweek > 1 && (
             <div className="p-3 bg-blue-500/20 border border-blue-400/30 rounded-xl backdrop-blur-sm">
               <p className="text-blue-100 text-sm">
-                Transfer window is open. You have {fantasyTeam.transfers_remaining} transfer(s) remaining.
+                {t('Transfer window is open. You have {{transfers_remaining}} transfer(s) remaining.')
+                  .replace('{{transfers_remaining}}', String(fantasyTeam.transfers_remaining))}
               </p>
             </div>
           )}
@@ -402,26 +437,26 @@ export default function MyTeam() {
       <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg p-6 border border-white/50">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-xl font-semibold text-gray-800">
-            Formation: {formation.defenders}-{formation.midfielders}-{formation.forwards}
+            {t('Formation:')} {formation.defenders}-{formation.midfielders}-{formation.forwards}
           </h2>
           <div className="flex items-center space-x-4 text-sm text-gray-600">
             {captain && (
               <div className="flex items-center bg-yellow-100 px-3 py-1 rounded-full">
                 <Crown className="h-4 w-4 text-yellow-600 mr-1" />
-                Captain: {captain.player?.name}
+                {t('Captain:')} {captain.player?.name}
               </div>
             )}
             {viceCaptain && (
               <div className="flex items-center bg-gray-100 px-3 py-1 rounded-full">
                 <Star className="h-4 w-4 text-gray-600 mr-1" />
-                Vice: {viceCaptain.player?.name}
+                {t('Vice:')} {viceCaptain.player?.name}
               </div>
             )}
           </div>
         </div>
 
         {/* Soccer Pitch */}
-        <div 
+        <div
           className="relative rounded-2xl min-h-[600px] bg-cover bg-center bg-no-repeat p-8 border-2 border-emerald-200"
           style={{
             backgroundImage: `url('https://i.imgur.com/x6NH58g.png')`,
@@ -440,6 +475,7 @@ export default function MyTeam() {
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
+                  t={t} // Pass translation function
                 />
               ))}
             </div>
@@ -454,6 +490,7 @@ export default function MyTeam() {
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
+                  t={t} // Pass translation function
                 />
               ))}
             </div>
@@ -468,6 +505,7 @@ export default function MyTeam() {
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
+                  t={t} // Pass translation function
                 />
               ))}
             </div>
@@ -482,6 +520,7 @@ export default function MyTeam() {
                   onSetCaptain={() => setCaptain(rosterPlayer.roster_id)}
                   onSetViceCaptain={() => setViceCaptain(rosterPlayer.roster_id)}
                   onPlayerClick={() => handlePlayerClick(rosterPlayer.player)}
+                  t={t} // Pass translation function
                 />
               ))}
             </div>
@@ -491,13 +530,13 @@ export default function MyTeam() {
 
       {/* Bench */}
       <div className="bg-white/80 backdrop-blur-sm rounded-2xl shadow-lg p-6 border border-white/50">
-        <h2 className="text-xl font-semibold text-gray-800 mb-4">Substitutes</h2>
+        <h2 className="text-xl font-semibold text-gray-800 mb-4">{t('Substitutes')}</h2>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {bench.map((rosterPlayer) => (
             <div key={rosterPlayer.roster_id} className="bg-gradient-to-br from-gray-50 to-gray-100 p-4 rounded-xl border border-gray-200 hover:shadow-md transition-all duration-200">
               <div className="flex flex-col items-center">
                 {/* Player Jersey */}
-                <div 
+                <div
                   className="w-60 h-60 mb-2 relative cursor-pointer hover:scale-105 transition-transform"
                   onClick={() => handlePlayerClick(rosterPlayer.player)}
                 >
@@ -512,14 +551,14 @@ export default function MyTeam() {
                       }}
                     />
                   ) : null}
-                  <div 
+                  <div
                     className={`w-full h-full bg-gray-300 rounded-lg flex items-center justify-center ${
                       rosterPlayer.player?.team_jersey ? 'hidden' : 'flex'
                     }`}
                   >
-                    <span className="text-xs text-gray-500">No Jersey</span>
+                    <span className="text-xs text-gray-500">{t('No Jersey')}</span>
                   </div>
-                  
+
                   {/* Captain/Vice Captain badges */}
                   {rosterPlayer.is_captain && (
                     <div className="absolute -top-1 -right-1 bg-yellow-500 text-white rounded-full p-1">
@@ -535,7 +574,7 @@ export default function MyTeam() {
 
                 {/* Player Info */}
                 <div className="text-center">
-                  <div 
+                  <div
                     className="font-medium text-gray-900 text-sm mb-1 cursor-pointer hover:text-emerald-600 transition-colors"
                     onClick={() => handlePlayerClick(rosterPlayer.player)}
                   >
@@ -578,13 +617,14 @@ interface PlayerCardProps {
   onSetCaptain: () => void;
   onSetViceCaptain: () => void;
   onPlayerClick: () => void;
+  t: (key: string) => string; // Add translation function to props
 }
 
-function PlayerCard({ rosterPlayer, canMakeChanges, onSetCaptain, onSetViceCaptain, onPlayerClick }: PlayerCardProps) {
+function PlayerCard({ rosterPlayer, canMakeChanges, onSetCaptain, onSetViceCaptain, onPlayerClick, t }: PlayerCardProps) {
   return (
     <div className="relative flex flex-col items-center">
       {/* Player Jersey - Bigger Size */}
-      <div 
+      <div
         className="w-60 h-60 relative cursor-pointer hover:scale-105 transition-transform mb-1"
         onClick={onPlayerClick}
       >
@@ -599,14 +639,14 @@ function PlayerCard({ rosterPlayer, canMakeChanges, onSetCaptain, onSetViceCapta
             }}
           />
         ) : null}
-        <div 
+        <div
           className={`w-full h-full bg-white rounded-lg flex items-center justify-center shadow-lg border-2 border-gray-200 ${
             rosterPlayer.player?.team_jersey ? 'hidden' : 'flex'
           }`}
         >
-          <span className="text-sm text-gray-500">No Jersey</span>
+          <span className="text-sm text-gray-500">{t('No Jersey')}</span>
         </div>
-        
+
         {/* Captain/Vice Captain badges */}
         {rosterPlayer.is_captain && (
           <div className="absolute -top-2 -right-2 bg-yellow-500 text-white rounded-full p-1 shadow-lg">
@@ -621,7 +661,7 @@ function PlayerCard({ rosterPlayer, canMakeChanges, onSetCaptain, onSetViceCapta
       </div>
 
       {/* Player Info Card - Very close to jersey */}
-      <div 
+      <div
         className="bg-white/95 backdrop-blur-sm rounded-lg shadow-lg p-2 min-w-[140px] text-center cursor-pointer hover:bg-white transition-all duration-200 border border-white/50"
         onClick={onPlayerClick}
       >
@@ -639,13 +679,13 @@ function PlayerCard({ rosterPlayer, canMakeChanges, onSetCaptain, onSetViceCapta
             onClick={onSetCaptain}
             className="bg-yellow-500 text-white px-2 py-1 rounded-lg text-xs hover:bg-yellow-600 transition-colors shadow-md"
           >
-            C
+            {t('C')}
           </button>
           <button
             onClick={onSetViceCaptain}
             className="bg-gray-500 text-white px-2 py-1 rounded-lg text-xs hover:bg-gray-600 transition-colors shadow-md"
           >
-            VC
+            {t('VC')}
           </button>
         </div>
       )}
