@@ -123,7 +123,25 @@ export default function TeamsManager() {
             {filteredTeams.map((team) => (
               <tr key={team.team_id} className="hover:bg-gray-50">
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="text-sm font-medium text-gray-900">{team.name}</div>
+                  <div className="flex items-center">
+                    {team.logo_url ? (
+                      <img
+                        src={team.logo_url}
+                        alt={`${team.name} logo`}
+                        className="h-8 w-8 rounded-full object-cover mr-3"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="h-8 w-8 rounded-full bg-gray-200 flex items-center justify-center mr-3">
+                        <span className="text-xs font-medium text-gray-500">
+                          {team.short_name.charAt(0)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="text-sm font-medium text-gray-900">{team.name}</div>
+                  </div>
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
